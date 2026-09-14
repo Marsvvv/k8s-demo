@@ -1,0 +1,355 @@
+# ============================================================
+# apps.yaml — 三个业务服务的 ConfigMap / Service / Deployment
+# 内容与 k8s/raw/04~06 一致，仅把镜像/副本数模板化
+# ============================================================
+
+# ---------- ConfigMaps ----------
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: user-service-config
+  namespace: {{ .Release.Namespace }}
+data:
+  SERVER_PORT: {{ .Values.userService.port | quote }}
+  DB_URL: "jdbc:mysql://mysql:3306/{{ .Values.mysql.database }}?useSSL=false&serverTimezone=Asia/Shanghai&characterEncoding=utf8"
+  DB_USER: {{ .Values.mysql.appUser | quote }}
+  MQ_HOST: "rabbitmq"
+  MQ_PORT: "5672"
+  MQ_USER: "guest"
+  MQ_PASSWORD: "guest"
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: order-service-config
+  namespace: {{ .Release.Namespace }}
+data:
+  SERVER_PORT: {{ .Values.orderService.port | quote }}
+  REDIS_HOST: "redis"
+  REDIS_PORT: "6379"
+  MQ_HOST: "rabbitmq"
+  MQ_PORT: "5672"
+  MQ_USER: "guest"
+  MQ_PASSWORD: "guest"
+  USER_SERVICE_URL: "http://user-service:{{ .Values.userService.port }}"
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: gateway-config
+  namespace: {{ .Release.Namespace }}
+data:
+  SERVER_PORT: {{ .Values.gateway.port | quote }}
+  USER_SERVICE_URL: "http://user-service:{{ .Values.userService.port }}"
+  ORDER_SERVICE_URL: "http://order-service:{{ .Values.orderService.port }}"
+
+---
+# ---------- Services ----------
+apiVersion: v1
+kind: Service
+metadata:
+  name: user-service
+  namespace: {{ .Release.Namespace }}
+spec:
+  selector:
+    app: user-service
+  ports:
+    - port: {{ .Values.userService.port }}
+      targetPort: {{ .Values.userService.port }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: order-service
+  namespace: {{ .Release.Namespace }}
+spec:
+  selector:
+    app: order-service
+  ports:
+    - port: {{ .Values.orderService.port }}
+      targetPort: {{ .Values.orderService.port }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: gateway
+  namespace: {{ .Release.Namespace }}
+spec:
+  selector:
+    app: gateway
+  ports:
+    - port: {{ .Values.gateway.port }}
+      targetPort: {{ .Values.gateway.port }}
+
+---
+# ---------- Deployments ----------
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: user-service
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "k8s-demo.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.userService.replicas }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app: user-service
+  template:
+    metadata:
+      labels:
+        app: user-service
+    spec:
+      terminationGracePeriodSeconds: 60
+      initContainers:
+        - name: wait-mysql
+          image: {{ .Values.mysql.image }}
+          env:
+            - name: MYSQL_ROOT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: mysql-secret
+                  key: MYSQL_ROOT_PASSWORD
+          command:
+            - sh
+            - -c
+            - 'until mysqladmin ping -h mysql -uroot -p"$MYSQL_ROOT_PASSWORD" --silent; do echo "waiting for mysql..."; sleep 3; done'
+        - name: skywalking-agent
+          image: {{ .Values.skywalking.agentImage }}
+          command: ["sh", "-c", "cp -r /skywalking/agent /agent-volume/"]
+          volumeMounts:
+            - name: skywalking-agent
+              mountPath: /agent-volume
+      containers:
+        - name: user-service
+          image: {{ .Values.image.registry }}/{{ .Values.userService.imageName }}:{{ .Values.image.tag }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - containerPort: {{ .Values.userService.port }}
+          envFrom:
+            - configMapRef:
+                name: user-service-config
+          env:
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: mysql-secret
+                  key: MYSQL_PASSWORD
+            - name: JAVA_TOOL_OPTIONS
+              value: "-javaagent:/skywalking-agent/skywalking-agent.jar"
+            - name: SW_AGENT_NAME
+              value: user-service
+            - name: SW_AGENT_COLLECTOR_BACKEND_SERVICES
+              value: skywalking-oap:11800
+          startupProbe:
+            httpGet:
+              path: /actuator/health/readiness
+              port: {{ .Values.userService.port }}
+            periodSeconds: 10
+            failureThreshold: 30
+          livenessProbe:
+            httpGet:
+              path: /actuator/health/liveness
+              port: {{ .Values.userService.port }}
+            periodSeconds: 10
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /actuator/health/readiness
+              port: {{ .Values.userService.port }}
+            periodSeconds: 5
+            failureThreshold: 3
+          lifecycle:
+            preStop:
+              exec:
+                command: ["sh", "-c", "sleep 25"]
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          volumeMounts:
+            - name: skywalking-agent
+              mountPath: /skywalking-agent
+      volumes:
+        - name: skywalking-agent
+          emptyDir: {}
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: order-service
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "k8s-demo.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.orderService.replicas }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app: order-service
+  template:
+    metadata:
+      labels:
+        app: order-service
+    spec:
+      terminationGracePeriodSeconds: 60
+      initContainers:
+        - name: wait-redis
+          image: {{ .Values.redis.image }}
+          command:
+            - sh
+            - -c
+            - 'until redis-cli -h redis ping | grep -q PONG; do echo "waiting for redis..."; sleep 3; done'
+        - name: skywalking-agent
+          image: {{ .Values.skywalking.agentImage }}
+          command: ["sh", "-c", "cp -r /skywalking/agent /agent-volume/"]
+          volumeMounts:
+            - name: skywalking-agent
+              mountPath: /agent-volume
+      containers:
+        - name: order-service
+          image: {{ .Values.image.registry }}/{{ .Values.orderService.imageName }}:{{ .Values.image.tag }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - containerPort: {{ .Values.orderService.port }}
+          envFrom:
+            - configMapRef:
+                name: order-service-config
+          env:
+            - name: JAVA_TOOL_OPTIONS
+              value: "-javaagent:/skywalking-agent/skywalking-agent.jar"
+            - name: SW_AGENT_NAME
+              value: order-service
+            - name: SW_AGENT_COLLECTOR_BACKEND_SERVICES
+              value: skywalking-oap:11800
+          startupProbe:
+            httpGet:
+              path: /actuator/health/readiness
+              port: {{ .Values.orderService.port }}
+            periodSeconds: 10
+            failureThreshold: 30
+          livenessProbe:
+            httpGet:
+              path: /actuator/health/liveness
+              port: {{ .Values.orderService.port }}
+            periodSeconds: 10
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /actuator/health/readiness
+              port: {{ .Values.orderService.port }}
+            periodSeconds: 5
+            failureThreshold: 3
+          lifecycle:
+            preStop:
+              exec:
+                command: ["sh", "-c", "sleep 25"]
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          volumeMounts:
+            - name: skywalking-agent
+              mountPath: /skywalking-agent
+      volumes:
+        - name: skywalking-agent
+          emptyDir: {}
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gateway
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "k8s-demo.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.gateway.replicas }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app: gateway
+  template:
+    metadata:
+      labels:
+        app: gateway
+    spec:
+      terminationGracePeriodSeconds: 60
+      initContainers:
+        - name: skywalking-agent
+          image: {{ .Values.skywalking.agentImage }}
+          command: ["sh", "-c", "cp -r /skywalking/agent /agent-volume/"]
+          volumeMounts:
+            - name: skywalking-agent
+              mountPath: /agent-volume
+      containers:
+        - name: gateway
+          image: {{ .Values.image.registry }}/{{ .Values.gateway.imageName }}:{{ .Values.image.tag }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - containerPort: {{ .Values.gateway.port }}
+          envFrom:
+            - configMapRef:
+                name: gateway-config
+          env:
+            - name: JAVA_TOOL_OPTIONS
+              value: "-javaagent:/skywalking-agent/skywalking-agent.jar"
+            - name: SW_AGENT_NAME
+              value: gateway
+            - name: SW_AGENT_COLLECTOR_BACKEND_SERVICES
+              value: skywalking-oap:11800
+          startupProbe:
+            httpGet:
+              path: /actuator/health/readiness
+              port: {{ .Values.gateway.port }}
+            periodSeconds: 10
+            failureThreshold: 30
+          livenessProbe:
+            httpGet:
+              path: /actuator/health/liveness
+              port: {{ .Values.gateway.port }}
+            periodSeconds: 10
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /actuator/health/readiness
+              port: {{ .Values.gateway.port }}
+            periodSeconds: 5
+            failureThreshold: 3
+          lifecycle:
+            preStop:
+              exec:
+                command: ["sh", "-c", "sleep 25"]
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          volumeMounts:
+            - name: skywalking-agent
+              mountPath: /skywalking-agent
+      volumes:
+        - name: skywalking-agent
+          emptyDir: {}

@@ -1,0 +1,37 @@
+server:
+  port: ${SERVER_PORT:8082}
+  shutdown: graceful
+
+spring:
+  application:
+    name: gateway-service
+  cloud:
+    gateway:
+      routes:
+        # /api/user/users/1  ->  user-service 的 /users/1
+        - id: user-route
+          uri: ${USER_SERVICE_URL:http://localhost:8080}
+          predicates:
+            - Path=/api/user/**
+          filters:
+            - StripPrefix=2
+        # /api/order/orders  ->  order-service 的 /orders
+        - id: order-route
+          uri: ${ORDER_SERVICE_URL:http://localhost:8081}
+          predicates:
+            - Path=/api/order/**
+          filters:
+            - StripPrefix=2
+  lifecycle:
+    timeout-per-shutdown-phase: 40s
+
+management:
+  endpoint:
+    health:
+      probes:
+        enabled: true
+      show-details: always
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus

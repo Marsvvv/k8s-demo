@@ -1,0 +1,140 @@
+# ============================================================
+# 04-user-service.yaml
+#
+# 教学点：
+# 1. ConfigMap 配置外置（改配置不动镜像）
+# 2. Secret 只放敏感项（DB_PASSWORD），通过 secretKeyRef 注入
+# 3. initContainers：
+#    - wait-mysql：等 MySQL 就绪再启动（启动依赖）
+#    - skywalking-agent：把 java agent 拷进共享 emptyDir（不改业务镜像）
+# 4. 探针三件套：startup（慢启动保护）/ liveness（存活）/ readiness（就绪摘流）
+# 5. 优雅停机：preStop sleep + terminationGracePeriodSeconds + 应用侧 graceful shutdown
+# 6. 滚动更新 maxUnavailable=0：更新期间始终有可用副本
+# ============================================================
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: user-service-config
+  namespace: k8s-demo
+data:
+  SERVER_PORT: "8080"
+  DB_URL: "jdbc:mysql://mysql:3306/k8s_demo?useSSL=false&serverTimezone=Asia/Shanghai&characterEncoding=utf8"
+  DB_USER: "k8s"
+  MQ_HOST: "rabbitmq"
+  MQ_PORT: "5672"
+  MQ_USER: "guest"
+  MQ_PASSWORD: "guest"
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: user-service
+  namespace: k8s-demo
+spec:
+  selector:
+    app: user-service
+  ports:
+    - port: 8080
+      targetPort: 8080
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: user-service
+  namespace: k8s-demo
+spec:
+  replicas: 2
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app: user-service
+  template:
+    metadata:
+      labels:
+        app: user-service
+    spec:
+      terminationGracePeriodSeconds: 60
+      initContainers:
+        # 1) 启动依赖：等 MySQL 可连接（避免 Pod 反复 CrashLoopBackOff）
+        - name: wait-mysql
+          image: mysql:8.0
+          env:
+            - name: MYSQL_ROOT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: mysql-secret
+                  key: MYSQL_ROOT_PASSWORD
+          command:
+            - sh
+            - -c
+            - 'until mysqladmin ping -h mysql -uroot -p"$MYSQL_ROOT_PASSWORD" --silent; do echo "waiting for mysql..."; sleep 3; done'
+        # 2) SkyWalking java agent 注入（云原生 sidecar 模式：不改业务镜像）
+        - name: skywalking-agent
+          image: apache/skywalking-java-agent:9.2.0
+          command: ["sh", "-c", "cp -r /skywalking/agent /agent-volume/"]
+          volumeMounts:
+            - name: skywalking-agent
+              mountPath: /agent-volume
+      containers:
+        - name: user-service
+          image: localhost:5000/k8s-demo/user-service:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8080
+          envFrom:
+            - configMapRef:
+                name: user-service-config
+          env:
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: mysql-secret
+                  key: MYSQL_PASSWORD
+            - name: JAVA_TOOL_OPTIONS
+              value: "-javaagent:/skywalking-agent/skywalking-agent.jar"
+            - name: SW_AGENT_NAME
+              value: user-service
+            - name: SW_AGENT_COLLECTOR_BACKEND_SERVICES
+              value: skywalking-oap:11800
+          startupProbe:
+            httpGet:
+              path: /actuator/health/readiness
+              port: 8080
+            periodSeconds: 10
+            failureThreshold: 30
+          livenessProbe:
+            httpGet:
+              path: /actuator/health/liveness
+              port: 8080
+            periodSeconds: 10
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /actuator/health/readiness
+              port: 8080
+            periodSeconds: 5
+            failureThreshold: 3
+          lifecycle:
+            preStop:
+              exec:
+                command: ["sh", "-c", "sleep 25"]
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          volumeMounts:
+            - name: skywalking-agent
+              mountPath: /skywalking-agent
+      volumes:
+        - name: skywalking-agent
+          emptyDir: {}

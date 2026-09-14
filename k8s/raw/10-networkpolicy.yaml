@@ -1,0 +1,188 @@
+# ============================================================
+# 10-networkpolicy.yaml — Pod 网络隔离（东西向流量防火墙）
+#
+# 教学点：
+# 1. 默认全通 → 默认拒绝 + 按需放行（最小暴露原则）
+# 2. k8s 默认 CNI（kindnet/flannel）不支持 NetworkPolicy！
+#    要生效需安装 Calico（部署手册 Phase 4 有步骤）
+# 3. 流矩阵：
+#    gateway → user/order
+#    order   → user（Feign）、redis、rabbitmq
+#    user    → mysql、rabbitmq
+#    所有    → skywalking-oap、DNS
+# ============================================================
+
+# 1) 命名空间默认拒绝一切入站/出站
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-all
+  namespace: k8s-demo
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+    - Egress
+
+---
+# 2) 放行 DNS（否则 Service 解析全挂）
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-dns-egress
+  namespace: k8s-demo
+spec:
+  podSelector: {}
+  policyTypes:
+    - Egress
+  egress:
+    - ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+
+---
+# 3) gateway → user-service
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-gateway-to-user
+  namespace: k8s-demo
+spec:
+  podSelector:
+    matchLabels:
+      app: user-service
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: gateway
+
+---
+# 4) gateway / order → order-service
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-to-order
+  namespace: k8s-demo
+spec:
+  podSelector:
+    matchLabels:
+      app: order-service
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: gateway
+        - podSelector:
+            matchLabels:
+              app: order-service
+
+---
+# 5) order → user-service（Feign 调用）
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-order-to-user
+  namespace: k8s-demo
+spec:
+  podSelector:
+    matchLabels:
+      app: user-service
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: order-service
+
+---
+# 6) user → mysql
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-user-to-mysql
+  namespace: k8s-demo
+spec:
+  podSelector:
+    matchLabels:
+      app: mysql
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: user-service
+
+---
+# 7) order → redis
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-order-to-redis
+  namespace: k8s-demo
+spec:
+  podSelector:
+    matchLabels:
+      app: redis
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: order-service
+
+---
+# 8) user/order → rabbitmq
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-to-rabbitmq
+  namespace: k8s-demo
+spec:
+  podSelector:
+    matchLabels:
+      app: rabbitmq
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: user-service
+        - podSelector:
+            matchLabels:
+              app: order-service
+
+---
+# 9) 所有业务服务 → skywalking-oap（agent 上报）
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-to-skywalking
+  namespace: k8s-demo
+spec:
+  podSelector:
+    matchLabels:
+      app: skywalking-oap
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: user-service
+        - podSelector:
+            matchLabels:
+              app: order-service
+        - podSelector:
+            matchLabels:
+              app: gateway

@@ -1,0 +1,6 @@
+apiVersion: v2
+name: k8s-demo
+description: k8s 云原生实战项目完整部署包（gateway/order/user + MySQL/Redis/RabbitMQ + SkyWalking）
+type: application
+version: 0.1.0
+appVersion: "1.0.0"

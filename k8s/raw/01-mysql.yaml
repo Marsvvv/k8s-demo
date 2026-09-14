@@ -1,0 +1,98 @@
+# ============================================================
+# 01-mysql.yaml — MySQL 用 StatefulSet 部署（有状态应用标准做法）
+#
+# 教学点：
+# 1. StatefulSet：Pod 名字稳定（mysql-0），配合 Headless Service 得到稳定 DNS
+# 2. volumeClaimTemplates：每个 Pod 自动创建独立 PVC（数据不丢的关键）
+# 3. Secret 用 stringData：免手动 base64 编码
+# 4. 就绪探针用 mysqladmin ping：中间件容器也需要探针
+# ============================================================
+
+# --- Secret：数据库密码（真实线上绝不能明文进 YAML 仓库） ---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: mysql-secret
+  namespace: k8s-demo
+type: Opaque
+stringData:
+  MYSQL_ROOT_PASSWORD: k8s123456
+  MYSQL_PASSWORD: k8s123456
+
+---
+# --- Headless Service：无虚拟 IP，直接解析到 Pod IP（StatefulSet 标配） ---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mysql
+  namespace: k8s-demo
+spec:
+  clusterIP: None          # Headless：访问 mysql:3306 时 DNS 直接返回 Pod IP
+  selector:
+    app: mysql
+  ports:
+    - port: 3306
+      targetPort: 3306
+
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: mysql
+  namespace: k8s-demo
+spec:
+  serviceName: mysql        # 必须指向上面的 Headless Service
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mysql
+  template:
+    metadata:
+      labels:
+        app: mysql
+    spec:
+      containers:
+        - name: mysql
+          image: mysql:8.0
+          env:
+            - name: MYSQL_DATABASE
+              value: k8s_demo            # 首次启动自动建库
+            - name: MYSQL_USER
+              value: k8s
+            - name: MYSQL_ROOT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: mysql-secret
+                  key: MYSQL_ROOT_PASSWORD
+            - name: MYSQL_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: mysql-secret
+                  key: MYSQL_PASSWORD
+          ports:
+            - containerPort: 3306
+          readinessProbe:
+            exec:
+              command: ["mysqladmin", "ping", "-h", "localhost", "-uroot", "-p$(MYSQL_ROOT_PASSWORD)"]
+            initialDelaySeconds: 20
+            periodSeconds: 5
+            timeoutSeconds: 5
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/mysql      # MySQL 数据目录，落到 PVC 上
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        storageClassName: standard           # kind 的 local-path provisioner
+        resources:
+          requests:
+            storage: 5Gi

@@ -1,0 +1,17 @@
+# ===================== 阶段 1：编译打包 =====================
+FROM maven:3.9-eclipse-temurin-17 AS build
+WORKDIR /build
+
+COPY pom.xml ./
+COPY order-service/pom.xml order-service/pom.xml
+COPY order-service/src order-service/src
+
+RUN mvn -q -f order-service/pom.xml package -DskipTests
+
+# ===================== 阶段 2：运行 =====================
+FROM eclipse-temurin:17-jre
+WORKDIR /app
+COPY --from=build /build/order-service/target/order-service-*.jar app.jar
+
+EXPOSE 8081
+ENTRYPOINT ["java", "-jar", "/app/app.jar"]

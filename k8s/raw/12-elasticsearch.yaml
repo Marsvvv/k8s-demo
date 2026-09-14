@@ -1,0 +1,83 @@
+# ============================================================
+# 12-elasticsearch.yaml — 日志存储与全文检索
+#
+# 教学点：
+# 1. 又一个 StatefulSet 用例：ES 是典型有状态应用（数据不能丢、稳定标识）
+# 2. 单节点演示模式 discovery.type=single-node（生产是多节点集群）
+# 3. 7.17 默认关闭 xpack.security（教学直连）；生产必开认证
+# 4. 内存：ES 吃内存，用 ES_JAVA_OPTS 限制堆，resources.limits 兜底
+# ============================================================
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: elasticsearch
+  namespace: k8s-demo
+spec:
+  selector:
+    app: elasticsearch
+  ports:
+    - name: http
+      port: 9200
+      targetPort: 9200
+
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: elasticsearch
+  namespace: k8s-demo
+spec:
+  serviceName: elasticsearch
+  replicas: 1
+  selector:
+    matchLabels:
+      app: elasticsearch
+  template:
+    metadata:
+      labels:
+        app: elasticsearch
+    spec:
+      containers:
+        - name: elasticsearch
+          image: docker.elastic.co/elasticsearch/elasticsearch:7.17.16
+          env:
+            - name: discovery.type
+              value: single-node
+            - name: ES_JAVA_OPTS
+              value: "-Xms1g -Xmx1g"
+          ports:
+            - containerPort: 9200
+          readinessProbe:
+            httpGet:
+              path: /_cluster/health?local=true
+              port: 9200
+            initialDelaySeconds: 60
+            periodSeconds: 10
+            timeoutSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /_cluster/health?local=true
+              port: 9200
+            initialDelaySeconds: 120
+            periodSeconds: 30
+            timeoutSeconds: 10
+          resources:
+            requests:
+              cpu: 250m
+              memory: 1Gi
+            limits:
+              cpu: "1"
+              memory: 2Gi
+          volumeMounts:
+            - name: data
+              mountPath: /usr/share/elasticsearch/data
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        storageClassName: standard
+        resources:
+          requests:
+            storage: 10Gi

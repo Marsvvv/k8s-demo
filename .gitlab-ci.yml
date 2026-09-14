@@ -1,0 +1,65 @@
+# ============================================================
+# .gitlab-ci.yml — 三段式 CI/CD 流水线
+#
+#   git push
+#     └─► build        （mvn 编译打包，快速失败反馈）
+#     └─► docker-image （Dockerfile 多阶段构建 3 个镜像，推送到 kind 内建 registry）
+#     └─► deploy       （kubectl set image 触发滚动更新，rollout status 等待完成）
+#
+# 前提：
+# 1. GitLab Runner（shell executor）跑在 WSL2 宿主机
+#    —— 直接使用宿主机的 mvn / docker / kubectl
+# 2. Runner 注册时 tag 设为 k8s-demo-runner
+# 3. kind 集群已用 kind-with-registry.sh 创建（含 localhost:5000 registry）
+# ============================================================
+
+stages:
+  - build
+  - docker-image
+  - deploy
+
+variables:
+  REGISTRY: localhost:5000/k8s-demo
+  NAMESPACE: k8s-demo
+  # 用 Git commit 短哈希作镜像标签：不可变、可追溯（真实线上的标准做法）
+  IMAGE_TAG: $CI_COMMIT_SHORT_SHA
+
+# ---------- 阶段 1：编译打包 ----------
+build:
+  stage: build
+  tags:
+    - k8s-demo-runner
+  script:
+    - mvn -q -DskipTests package
+  artifacts:
+    paths:
+      - "*/target/*.jar"
+    expire_in: 30 mins
+
+# ---------- 阶段 2：构建镜像并推送 ----------
+docker-image:
+  stage: docker-image
+  tags:
+    - k8s-demo-runner
+  script:
+    - docker build -f docker/Dockerfile.user    -t $REGISTRY/user-service:$IMAGE_TAG .
+    - docker build -f docker/Dockerfile.order   -t $REGISTRY/order-service:$IMAGE_TAG .
+    - docker build -f docker/Dockerfile.gateway -t $REGISTRY/gateway:$IMAGE_TAG .
+    - docker push $REGISTRY/user-service:$IMAGE_TAG
+    - docker push $REGISTRY/order-service:$IMAGE_TAG
+    - docker push $REGISTRY/gateway:$IMAGE_TAG
+
+# ---------- 阶段 3：滚动发布 ----------
+deploy:
+  stage: deploy
+  tags:
+    - k8s-demo-runner
+  script:
+    # set image 只改镜像不删 Pod，触发滚动更新（配合 maxUnavailable=0 零宕机）
+    - kubectl -n $NAMESPACE set image deployment/user-service user-service=$REGISTRY/user-service:$IMAGE_TAG
+    - kubectl -n $NAMESPACE set image deployment/order-service order-service=$REGISTRY/order-service:$IMAGE_TAG
+    - kubectl -n $NAMESPACE set image deployment/gateway gateway=$REGISTRY/gateway:$IMAGE_TAG
+    # 等待滚动更新完成，失败则流水线标红（比"apply 完就走"更严谨）
+    - kubectl -n $NAMESPACE rollout status deployment/user-service --timeout=180s
+    - kubectl -n $NAMESPACE rollout status deployment/order-service --timeout=180s
+    - kubectl -n $NAMESPACE rollout status deployment/gateway --timeout=180s

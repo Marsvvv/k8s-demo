@@ -1,0 +1,48 @@
+# ============================================================
+# 07-ingress.yaml — 域名路由（集群的"网关"）
+#
+# 教学点：
+# 1. Ingress 只是规则，真正转发靠 ingress-nginx controller（需先安装）
+# 2. 本地访问用 hosts 文件把域名指到 127.0.0.1
+#    访问：http://k8sdemo.local/api/user/users/1
+#          http://skywalking.local（SkyWalking UI）
+# ============================================================
+
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: k8s-demo-ingress
+  namespace: k8s-demo
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: k8sdemo.local
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: gateway
+                port:
+                  number: 8082
+
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: skywalking-ingress
+  namespace: k8s-demo
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: skywalking.local
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: skywalking-ui
+                port:
+                  number: 8080

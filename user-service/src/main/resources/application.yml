@@ -1,0 +1,41 @@
+server:
+  port: ${SERVER_PORT:8080}
+  shutdown: graceful
+
+spring:
+  application:
+    name: user-service
+  datasource:
+    url: ${DB_URL:jdbc:mysql://localhost:3306/k8s_demo?useSSL=false&serverTimezone=Asia/Shanghai&characterEncoding=utf8}
+    username: ${DB_USER:root}
+    password: ${DB_PASSWORD:root}
+  jpa:
+    hibernate:
+      # 演示用自动建表；真实线上用 Flyway/Liquibase 管理表结构
+      ddl-auto: update
+    open-in-view: false
+  rabbitmq:
+    host: ${MQ_HOST:localhost}
+    port: ${MQ_PORT:5672}
+    username: ${MQ_USER:guest}
+    password: ${MQ_PASSWORD:guest}
+    listener:
+      simple:
+        # RabbitMQ 暂时不可达时自动重试，避免服务启动失败（与就绪探针配合）
+        retry:
+          enabled: true
+          initial-interval: 3s
+          max-attempts: 10
+  lifecycle:
+    timeout-per-shutdown-phase: 40s
+
+management:
+  endpoint:
+    health:
+      probes:
+        enabled: true
+      show-details: always
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus

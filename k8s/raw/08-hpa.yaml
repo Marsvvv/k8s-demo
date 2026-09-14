@@ -1,0 +1,28 @@
+# ============================================================
+# 08-hpa.yaml — 水平自动扩缩容（HPA）
+#
+# 教学点：
+# 1. 依赖 metrics-server 采集指标（kind 需要单独安装，见部署手册）
+# 2. 按 CPU 使用率 60% 自动扩 order-service 副本（2~10 个）
+# 3. 演练：压测下单接口 → kubectl get hpa 观察 → 自动扩容
+# ============================================================
+
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: order-service-hpa
+  namespace: k8s-demo
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: order-service
+  minReplicas: 2
+  maxReplicas: 10
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 60

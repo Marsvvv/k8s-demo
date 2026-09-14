@@ -1,0 +1,57 @@
+# ============================================================
+# 02-redis.yaml — Redis 用 Deployment 部署（单副本缓存，无状态化对待）
+#
+# 教学点：与 MySQL 的 StatefulSet 形成对比——
+# 缓存丢了可以重建（数据可从数据库回填），所以用 Deployment 即可。
+# ============================================================
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis
+  namespace: k8s-demo
+spec:
+  selector:
+    app: redis
+  ports:
+    - port: 6379
+      targetPort: 6379
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redis
+  namespace: k8s-demo
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: redis
+  template:
+    metadata:
+      labels:
+        app: redis
+    spec:
+      containers:
+        - name: redis
+          image: redis:7-alpine
+          ports:
+            - containerPort: 6379
+          readinessProbe:
+            exec:
+              command: ["redis-cli", "ping"]
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          livenessProbe:
+            exec:
+              command: ["redis-cli", "ping"]
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 256Mi

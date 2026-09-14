@@ -1,0 +1,42 @@
+# ============================================================
+# 09-rbac.yaml — RBAC 最小权限示例
+#
+# 教学点：
+# 1. ServiceAccount = Pod 的身份（代替默认 default SA）
+# 2. Role 定义"能干嘛"（命名空间内），RoleBinding 把角色发给身份
+# 3. 验证：kubectl auth can-i list pods --as=system:serviceaccount:k8s-demo:app-sa -n k8s-demo
+#    应返回 yes；而 delete pods 应返回 no —— 最小权限原则
+# ============================================================
+
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: app-sa
+  namespace: k8s-demo
+
+---
+# 只允许查看 Pod（get/list/watch），不允许任何修改
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: pod-reader
+  namespace: k8s-demo
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch"]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: app-sa-pod-reader
+  namespace: k8s-demo
+subjects:
+  - kind: ServiceAccount
+    name: app-sa
+    namespace: k8s-demo
+roleRef:
+  kind: Role
+  name: pod-reader
+  apiGroup: rbac.authorization.k8s.io

@@ -1,0 +1,101 @@
+# ============================================================
+# 14-filebeat.yaml — 日志采集器（DaemonSet 经典用例）
+#
+# 教学点：
+# 1. DaemonSet：每个节点跑一个采集器（第三个控制器类型，与 Deployment/StatefulSet 对比）
+# 2. 容器日志在节点上的位置：/var/log/containers/*.log（符号链接到 /var/log/pods）
+# 3. add_kubernetes_metadata：给日志自动打上 Pod/命名空间标签（Kibana 里按服务筛选）
+# 4. 业务代码零改动：只要打到 stdout（12-factor），Filebeat 全部收走
+# ============================================================
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: filebeat-config
+  namespace: k8s-demo
+data:
+  filebeat.yml: |
+    filebeat.inputs:
+      # 采集节点上所有容器日志（stdout/stderr）
+      - type: container
+        paths:
+          - /var/log/containers/*.log
+
+    processors:
+      # 按日志路径匹配 Pod 元数据（CRI/containerd 环境的官方推荐方式）
+      - add_kubernetes_metadata:
+          host: ${NODE_NAME}
+          matchers:
+            - logs_path:
+                logs_path: "/var/log/containers/"
+
+    output.elasticsearch:
+      hosts: ['http://elasticsearch:9200']
+      # 索引按天滚动：k8s-demo-2026.09.14 这样的名字
+      index: "k8s-demo-%{+yyyy.MM.dd}"
+
+    # 教学简化：关闭 ILM 生命周期管理和模板（生产建议开启）
+    setup.ilm.enabled: false
+    setup.template.enabled: false
+
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: filebeat
+  namespace: k8s-demo
+spec:
+  selector:
+    matchLabels:
+      app: filebeat
+  template:
+    metadata:
+      labels:
+        app: filebeat
+    spec:
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: filebeat
+          image: docker.elastic.co/beats/filebeat:7.17.16
+          args: ["-c", "/etc/filebeat.yml", "-e"]
+          env:
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: 200m
+              memory: 256Mi
+          volumeMounts:
+            - name: config
+              mountPath: /etc/filebeat.yml
+              subPath: filebeat.yml
+              readOnly: true
+            # 容器日志实际存放位置（节点级路径，所以要用 DaemonSet）
+            - name: varlogcontainers
+              mountPath: /var/log/containers
+              readOnly: true
+            - name: varlogpods
+              mountPath: /var/log/pods
+              readOnly: true
+            # 时区一致性
+            - name: localtime
+              mountPath: /etc/localtime
+              readOnly: true
+      volumes:
+        - name: config
+          configMap:
+            name: filebeat-config
+        - name: varlogcontainers
+          hostPath:
+            path: /var/log/containers
+        - name: varlogpods
+          hostPath:
+            path: /var/log/pods
+        - name: localtime
+          hostPath:
+            path: /etc/localtime

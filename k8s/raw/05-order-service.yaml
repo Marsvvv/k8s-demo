@@ -1,0 +1,125 @@
+# ============================================================
+# 05-order-service.yaml
+#
+# 教学点（与 04 相同部分不重复注释）：
+# 1. USER_SERVICE_URL=http://user-service:8080 —— Feign 直连 k8s Service DNS
+#    （k8s 原生服务发现，替代 Nacos/Eureka）
+# 2. wait-redis initContainer：等 Redis 就绪
+# 3. RabbitMQ 不硬等：靠 Spring AMQP 自动重连 + 就绪探针兜底（两种启动依赖方案对比）
+# 4. 本服务是 HPA 演练对象（见 08-hpa.yaml）
+# ============================================================
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: order-service-config
+  namespace: k8s-demo
+data:
+  SERVER_PORT: "8081"
+  REDIS_HOST: "redis"
+  REDIS_PORT: "6379"
+  MQ_HOST: "rabbitmq"
+  MQ_PORT: "5672"
+  MQ_USER: "guest"
+  MQ_PASSWORD: "guest"
+  USER_SERVICE_URL: "http://user-service:8080"
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: order-service
+  namespace: k8s-demo
+spec:
+  selector:
+    app: order-service
+  ports:
+    - port: 8081
+      targetPort: 8081
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: order-service
+  namespace: k8s-demo
+spec:
+  replicas: 2
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app: order-service
+  template:
+    metadata:
+      labels:
+        app: order-service
+    spec:
+      terminationGracePeriodSeconds: 60
+      initContainers:
+        - name: wait-redis
+          image: redis:7-alpine
+          command:
+            - sh
+            - -c
+            - 'until redis-cli -h redis ping | grep -q PONG; do echo "waiting for redis..."; sleep 3; done'
+        - name: skywalking-agent
+          image: apache/skywalking-java-agent:9.2.0
+          command: ["sh", "-c", "cp -r /skywalking/agent /agent-volume/"]
+          volumeMounts:
+            - name: skywalking-agent
+              mountPath: /agent-volume
+      containers:
+        - name: order-service
+          image: localhost:5000/k8s-demo/order-service:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8081
+          envFrom:
+            - configMapRef:
+                name: order-service-config
+          env:
+            - name: JAVA_TOOL_OPTIONS
+              value: "-javaagent:/skywalking-agent/skywalking-agent.jar"
+            - name: SW_AGENT_NAME
+              value: order-service
+            - name: SW_AGENT_COLLECTOR_BACKEND_SERVICES
+              value: skywalking-oap:11800
+          startupProbe:
+            httpGet:
+              path: /actuator/health/readiness
+              port: 8081
+            periodSeconds: 10
+            failureThreshold: 30
+          livenessProbe:
+            httpGet:
+              path: /actuator/health/liveness
+              port: 8081
+            periodSeconds: 10
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /actuator/health/readiness
+              port: 8081
+            periodSeconds: 5
+            failureThreshold: 3
+          lifecycle:
+            preStop:
+              exec:
+                command: ["sh", "-c", "sleep 25"]
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          volumeMounts:
+            - name: skywalking-agent
+              mountPath: /skywalking-agent
+      volumes:
+        - name: skywalking-agent
+          emptyDir: {}

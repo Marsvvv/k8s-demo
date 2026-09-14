@@ -1,0 +1,75 @@
+# ============================================================
+# values.yaml — 所有可调参数
+# 用法：helm upgrade --install k8s-demo . -n k8s-demo --set image.tag=v2
+# ============================================================
+
+image:
+  # 镜像仓库前缀（kind 内建 registry）
+  registry: localhost:5000/k8s-demo
+  # 镜像标签：CI 里用 --set image.tag=$CI_COMMIT_SHORT_SHA 传入
+  tag: latest
+  pullPolicy: Always
+
+userService:
+  replicas: 2
+  imageName: user-service
+  port: 8080
+
+orderService:
+  replicas: 2
+  imageName: order-service
+  port: 8081
+
+gateway:
+  replicas: 2
+  imageName: gateway
+  port: 8082
+
+mysql:
+  image: mysql:8.0
+  rootPassword: k8s123456
+  appUser: k8s
+  appPassword: k8s123456
+  database: k8s_demo
+  storageSize: 5Gi
+  storageClass: standard
+
+redis:
+  image: redis:7-alpine
+
+rabbitmq:
+  image: rabbitmq:3-management
+  storageSize: 5Gi
+  storageClass: standard
+
+skywalking:
+  enabled: true
+  oapImage: apache/skywalking-oap-server:9.2.0
+  uiImage: apache/skywalking-ui:9.2.0
+  agentImage: apache/skywalking-java-agent:9.2.0
+
+efk:
+  enabled: true
+  elasticsearchImage: docker.elastic.co/elasticsearch/elasticsearch:7.17.16
+  kibanaImage: docker.elastic.co/kibana/kibana:7.17.16
+  filebeatImage: docker.elastic.co/beats/filebeat:7.17.16
+  kibanaHost: kibana.local
+  esStorageSize: 10Gi
+  esStorageClass: standard
+
+ingress:
+  appHost: k8sdemo.local
+  skywalkingHost: skywalking.local
+
+hpa:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 10
+  targetCpuUtilization: 60
+
+rbac:
+  enabled: true
+
+networkPolicy:
+  # 注意：需要 Calico 等支持 NetworkPolicy 的 CNI 才生效
+  enabled: false

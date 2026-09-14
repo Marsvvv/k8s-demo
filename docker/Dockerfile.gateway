@@ -1,0 +1,17 @@
+# ===================== 阶段 1：编译打包 =====================
+FROM maven:3.9-eclipse-temurin-17 AS build
+WORKDIR /build
+
+COPY pom.xml ./
+COPY gateway-service/pom.xml gateway-service/pom.xml
+COPY gateway-service/src gateway-service/src
+
+RUN mvn -q -f gateway-service/pom.xml package -DskipTests
+
+# ===================== 阶段 2：运行 =====================
+FROM eclipse-temurin:17-jre
+WORKDIR /app
+COPY --from=build /build/gateway-service/target/gateway-service-*.jar app.jar
+
+EXPOSE 8082
+ENTRYPOINT ["java", "-jar", "/app/app.jar"]
