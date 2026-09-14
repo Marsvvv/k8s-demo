@@ -44,17 +44,11 @@ kind 集群（WSL2 内，多节点，自带 local registry）
 | 构建 | Maven 多模块 monorepo | 代码少时最好管理；CI 按模块打镜像 |
 | 镜像 | 多阶段 Dockerfile（maven:3.9-temurin-17 → eclipse-temurin:17-jre） | 镜像最小化教学点 |
 | 集群 | kind 多节点（WSL2） | 秒级建/毁，反复练习 |
-| 自建集群 | RKE2 单机 → 3 节点 HA + Rancher 纳管 + keepalived VIP（第二阶段，docs/04~06） | 真实生产形态；单点故障演练验证高可用 |
-| 镜像仓库 | kind 内建 local registry（localhost:5000）→ Harbor（第二阶段，docs/05、08） | Phase 3 跑通零成本；Harbor 含账号体系/镜像扫描/自签证书与 containerd 信任 |
-| 负载均衡入口 | MetalLB L2（第二阶段，docs/05） | 裸金属没有云 LB，LoadBalancer 类型 Service 的 Pending 问题由它解决 |
+| 镜像仓库 | kind 内建 local registry（localhost:5000） | Phase 3 跑通零成本；Harbor 为 Phase 5 升级项 |
 | CI/CD | GitLab CE + GitLab Runner（shell executor，WSL2） | 国内企业真实线标配；全自建 |
 | APM 链路追踪 | SkyWalking 9.2（OAP + UI，Helm/裸 YAML 部署） | 国内企业真实线标配；java agent 由 initContainer 注入共享卷，不改镜像——云原生 sidecar 模式教学点 |
 | 日志采集 | EFK：Filebeat 7.17（DaemonSet）→ ES 7.17（StatefulSet 单节点）→ Kibana（Ingress） | 国内企业真实线标配；DaemonSet 每节点一采集器；业务零改动（12-factor stdout） |
-| 存储 | local-path provisioner（kind 自带）→ NFS provisioner（第二阶段，docs/05） | Phase 5 升级项已完成：RKE2 无默认 StorageClass，NFS 供多节点共享 |
-| 证书 | cert-manager（第二阶段，docs/05） | 自签 CA 教学 + Let's Encrypt 生产路径 |
-| GitOps | ArgoCD（第二阶段，docs/07） | 推式 CI（02 章）与拉式 GitOps 对比；selfHeal 防漂移 |
-| 备份/告警 | Velero + MinIO、Alertmanager（第二阶段，docs/07） | 集群级备份恢复演练；告警到钉钉 |
-| 离线交付 | 离线安装包全链路（第二阶段，docs/08） | 政企内网：联网机打包 → 搬运 → 内网 Harbor 供货 |
+| 存储 | local-path provisioner（kind 自带） | Phase 5 升级 NFS provisioner |
 | 监控 | kube-prometheus-stack（Helm） | 真实线上标准配置 |
 
 ## 4. 模块与代码结构
@@ -123,25 +117,15 @@ k8s-demo/
 | 2 | 手动全链路：build → push → apply → 浏览器验证 | 核心成果 |
 | 3 | GitLab CE 安装 + 建仓 push + Runner 注册 + CI 自动发布 | CI/CD 闭环 |
 | 4 | Helm 化 + HPA + RBAC + NetworkPolicy + SkyWalking 链路追踪 | 全知识点覆盖 |
-| 5 | 监控（Prometheus/Grafana）、NFS、Harbor、ArgoCD | 真实线上全貌（已由 docs/05、07 覆盖） |
-| 6 | 自建集群实战：RKE2 单机 → 3 节点 HA → 运维配套 → 离线内网交付（docs/04~08） | 真实生产形态 |
+| 5 | 监控（Prometheus/Grafana）、NFS、Harbor、ArgoCD | 真实线上全貌 |
 
 ## 8. 简化声明（真实线上会不一样，文档中会注明）
 
 - 生产用 Flyway/Liquibase 管表结构，本项目用 JPA `ddl-auto=update` 简化
 - 生产 Redis 用主从/哨兵/集群，本项目单副本
 - 生产 RabbitMQ 用镜像队列/集群，本项目单副本
-- 生产仓库用 Harbor（账号体系/镜像扫描），本项目 kind 内建 registry——**第二阶段已升级 Harbor（docs/05、08）**；Harbor 本身的高可用仍未覆盖
+- 生产仓库用 Harbor（账号体系/镜像扫描），本项目 kind 内建 registry
 - 生产 CI 用 docker-in-docker 或 Kaniko，本项目 shell executor 直调宿主 docker
 - SkyWalking 存储用 H2（重启即丢，仅演示）；生产用 Elasticsearch 持久化
 - EFK 的 ES 单节点且关闭 security/ILM（教学简化）；生产多节点集群 + 认证 + 生命周期管理
 - 镜像仓库、java agent 镜像等官方镜像在国内网络下需配置镜像加速（文档 00 环境搭建中有说明）
-
-**第二阶段（自建集群）的简化项**：
-
-- Rancher 单副本（生产 3 副本 + 外部 MySQL），见 docs/06 §6
-- NFS 单机存储（生产 Ceph/云盘分布式存储），见 docs/06 §6
-- keepalived VIP 为教学版（生产用硬件/云负载均衡），见 docs/06 §3
-- MetalLB L2 模式（生产大规模用 BGP 模式），见 docs/05 §1.2
-- 自签证书（生产 Let's Encrypt/公司 CA），见 docs/05 §4
-- 离线交付物为手工流程（生产应脚本化归档，形成标准交付包），见 docs/08 §6
